@@ -1,8 +1,15 @@
 <script>
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { browser } from '$app/environment';
+  import Navbar from '$lib/components/Navbar.svelte';
 
   // API base URL - adjust this to match your backend
   const API_BASE = 'http://localhost:8000';
+
+  // Authentication state
+  let isAuthenticated = false;
+  let user = null;
 
   // State variables
   let files = [];
@@ -25,9 +32,33 @@
 
   // Load documents and models on component mount
   onMount(() => {
-    loadDocuments();
-    loadAvailableModels();
+    checkAuthentication();
   });
+
+  function checkAuthentication() {
+    if (browser) {
+      const token = localStorage.getItem('access_token');
+      const userData = localStorage.getItem('user');
+      
+      if (token && userData) {
+        try {
+          user = JSON.parse(userData);
+          isAuthenticated = true;
+          loadDocuments();
+          loadAvailableModels();
+        } catch (error) {
+          console.error('Error parsing user data:', error);
+          redirectToSignIn();
+        }
+      } else {
+        redirectToSignIn();
+      }
+    }
+  }
+
+  function redirectToSignIn() {
+    goto('/sign');
+  }
 
   // Handle file selection
   function handleFileSelect(event) {
@@ -45,12 +76,20 @@
     const formData = new FormData();
     formData.append('file', file);
 
+    const token = localStorage.getItem('access_token');
     const response = await fetch(`${API_BASE}/upload-pdf/`, {
       method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
       body: formData
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        redirectToSignIn();
+        return;
+      }
       const error = await response.json();
       throw new Error(error.detail || 'Upload failed');
     }
@@ -65,12 +104,20 @@
       formData.append('files', file);
     });
 
+    const token = localStorage.getItem('access_token');
     const response = await fetch(`${API_BASE}/upload-multiple-pdfs/`, {
       method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
       body: formData
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        redirectToSignIn();
+        return;
+      }
       const error = await response.json();
       throw new Error(error.detail || 'Upload failed');
     }
@@ -122,10 +169,21 @@
   async function loadDocuments() {
     loading = true;
     try {
-      const response = await fetch(`${API_BASE}/documents/`);
+      const token = localStorage.getItem('access_token');
+      const response = await fetch(`${API_BASE}/documents/`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
       if (!response.ok) {
+        if (response.status === 401) {
+          redirectToSignIn();
+          return;
+        }
         throw new Error('Failed to load documents');
       }
+      
       const data = await response.json();
       documents = data.documents;
     } catch (error) {
@@ -138,7 +196,12 @@
   // Load available models
   async function loadAvailableModels() {
     try {
-      const response = await fetch(`${API_BASE}/ollama/models`);
+      const token = localStorage.getItem('access_token');
+      const response = await fetch(`${API_BASE}/ollama/models`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         availableModels = data.models;
@@ -155,11 +218,19 @@
     }
 
     try {
+      const token = localStorage.getItem('access_token');
       const response = await fetch(`${API_BASE}/documents/${documentId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          redirectToSignIn();
+          return;
+        }
         throw new Error('Failed to delete document');
       }
 
@@ -203,10 +274,12 @@
     scrollToBottom();
 
     try {
+      const token = localStorage.getItem('access_token');
       const response = await fetch(`${API_BASE}/query/`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           question: question,
@@ -216,6 +289,10 @@
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          redirectToSignIn();
+          return;
+        }
         const error = await response.json();
         throw new Error(error.detail || 'Query failed');
       }
@@ -303,199 +380,211 @@
   <title>RAG Pipeline - Document Manager & Chat</title>
 </svelte:head>
 
-<main class="container">
-  <header>
-    <h1>RAG Pipeline Document Manager</h1>
-    <p>Upload and manage PDF documents, then chat with your documents</p>
-  </header>
+<!-- Add Navbar -->
+<Navbar />
 
-  <!-- Message Display -->
-  {#if message}
-    <div class="message {messageType}">
-      {message}
-    </div>
-  {/if}
+<!-- Show content only if authenticated -->
+{#if isAuthenticated}
+  <main class="container">
+    <header>
+      <h1>Welcome back, {user?.full_name || 'User'}!</h1>
+      <p>Upload and manage PDF documents, then chat with your documents</p>
+    </header>
 
-  <div class="main-content">
-    <!-- Left Column: Upload & Documents -->
-    <div class="left-column">
-      <!-- Upload Section -->
-      <section class="upload-section">
-        <h2>Upload Documents</h2>
-        
-        <div class="upload-area">
-          <input
-            bind:this={fileInput}
-            type="file"
-            multiple
-            accept=".pdf"
-            on:change={handleFileSelect}
-            disabled={uploading}
-          />
+    <!-- Message Display -->
+    {#if message}
+      <div class="message {messageType}">
+        {message}
+      </div>
+    {/if}
+
+    <div class="main-content">
+      <!-- Left Column: Upload & Documents -->
+      <div class="left-column">
+        <!-- Upload Section -->
+        <section class="upload-section">
+          <h2>Upload Documents</h2>
           
-          {#if files.length > 0}
-            <div class="selected-files">
-              <h3>Selected Files ({files.length}):</h3>
-              <ul>
-                {#each files as file}
-                  <li>
-                    <span class="filename">{file.name}</span>
-                    <span class="filesize">({formatFileSize(file.size)})</span>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-
-          <button
-            on:click={handleUpload}
-            disabled={uploading || files.length === 0}
-            class="upload-btn"
-          >
-            {#if uploading}
-              <span class="spinner"></span>
-              Processing...
-            {:else}
-              Upload {files.length > 1 ? `${files.length} PDFs` : 'PDF'}
-            {/if}
-          </button>
-        </div>
-      </section>
-
-      <!-- Documents List -->
-      <section class="documents-section">
-        <div class="section-header">
-          <h2>Documents ({documents.length})</h2>
-          <button on:click={loadDocuments} disabled={loading} class="refresh-btn">
-            {#if loading}
-              <span class="spinner"></span>
-            {:else}
-              Refresh
-            {/if}
-          </button>
-        </div>
-
-        {#if loading}
-          <div class="loading">Loading documents...</div>
-        {:else if documents.length === 0}
-          <div class="empty-state">
-            <p>No documents uploaded yet. Upload your first PDF to get started!</p>
-          </div>
-        {:else}
-          <div class="documents-list">
-            {#each documents as doc}
-              <div class="document-item">
-                <div class="document-info">
-                  <h4>{doc.filename}</h4>
-                  <p>{doc.chunk_count} chunks</p>
-                </div>
-                <button
-                  on:click={() => deleteDocument(doc.id)}
-                  class="delete-btn"
-                  title="Delete document"
-                >
-                  ×
-                </button>
+          <div class="upload-area">
+            <input
+              bind:this={fileInput}
+              type="file"
+              multiple
+              accept=".pdf"
+              on:change={handleFileSelect}
+              disabled={uploading}
+            />
+            
+            {#if files.length > 0}
+              <div class="selected-files">
+                <h3>Selected Files ({files.length}):</h3>
+                <ul>
+                  {#each files as file}
+                    <li>
+                      <span class="filename">{file.name}</span>
+                      <span class="filesize">({formatFileSize(file.size)})</span>
+                    </li>
+                  {/each}
+                </ul>
               </div>
-            {/each}
-          </div>
-        {/if}
-      </section>
-    </div>
-
-    <!-- Right Column: Chat -->
-    <div class="right-column">
-      <section class="chat-section">
-        <div class="chat-header">
-          <h2>Chat with Documents</h2>
-          <div class="chat-controls">
-            {#if availableModels.length > 0}
-              <select bind:value={selectedModel} class="model-select">
-                {#each availableModels as model}
-                  <option value={model}>{model}</option>
-                {/each}
-              </select>
             {/if}
-            <button on:click={clearChat} class="clear-btn" disabled={chatMessages.length === 0}>
-              Clear Chat
+
+            <button
+              on:click={handleUpload}
+              disabled={uploading || files.length === 0}
+              class="upload-btn"
+            >
+              {#if uploading}
+                <span class="spinner"></span>
+                Processing...
+              {:else}
+                Upload {files.length > 1 ? `${files.length} PDFs` : 'PDF'}
+              {/if}
             </button>
           </div>
-        </div>
+        </section>
 
-        <div class="chat-container" bind:this={chatContainer}>
-          {#if chatMessages.length === 0}
-            <div class="chat-empty">
-              <p>Ask questions about your uploaded documents!</p>
-              {#if documents.length === 0}
-                <p class="hint">Upload some documents first to get started.</p>
-              {/if}
-            </div>
-          {:else}
-            {#each chatMessages as msg}
-              <div class="message-wrapper {msg.type}">
-                <div class="message-content">
-                  {#if msg.loading}
-                    <div class="typing-indicator">
-                      <span class="spinner"></span>
-                      Thinking...
-                    </div>
-                  {:else}
-                    <div class="message-text" class:error={msg.error}>
-                      {msg.content}
-                    </div>
-                    
-                    {#if msg.sources && msg.sources.length > 0}
-                      <div class="sources">
-                        <h4>Sources:</h4>
-                        {#each msg.sources as source}
-                          <div class="source-item">
-                            <div class="source-header">
-                              <span class="source-filename">{source.filename}</span>
-                              <span class="source-similarity">({(source.similarity * 100).toFixed(1)}% match)</span>
-                            </div>
-                            <div class="source-preview">{source.preview}</div>
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                    
-                    {#if msg.model}
-                      <div class="model-info">Model: {msg.model}</div>
-                    {/if}
-                  {/if}
-                </div>
-                <div class="message-time">{formatChatTime(msg.timestamp)}</div>
-              </div>
-            {/each}
-          {/if}
-        </div>
-
-        <div class="chat-input-area">
-          <div class="input-wrapper">
-            <textarea
-              bind:value={currentQuestion}
-              placeholder={documents.length > 0 ? "Ask a question about your documents..." : "Upload documents first to start chatting"}
-              disabled={isQuerying || documents.length === 0}
-              on:keypress={handleKeyPress}
-              rows="2"
-            ></textarea>
-            <button
-              on:click={handleChatSubmit}
-              disabled={!currentQuestion.trim() || isQuerying || documents.length === 0}
-              class="send-btn"
-            >
-              {#if isQuerying}
+        <!-- Documents List -->
+        <section class="documents-section">
+          <div class="section-header">
+            <h2>Documents ({documents.length})</h2>
+            <button on:click={loadDocuments} disabled={loading} class="refresh-btn">
+              {#if loading}
                 <span class="spinner"></span>
               {:else}
-                Send
+                Refresh
               {/if}
             </button>
           </div>
-        </div>
-      </section>
+
+          {#if loading}
+            <div class="loading">Loading documents...</div>
+          {:else if documents.length === 0}
+            <div class="empty-state">
+              <p>No documents uploaded yet. Upload your first PDF to get started!</p>
+            </div>
+          {:else}
+            <div class="documents-list">
+              {#each documents as doc}
+                <div class="document-item">
+                  <div class="document-info">
+                    <h4>{doc.filename}</h4>
+                    <p>{doc.chunk_count} chunks</p>
+                  </div>
+                  <button
+                    on:click={() => deleteDocument(doc.id)}
+                    class="delete-btn"
+                    title="Delete document"
+                  >
+                    ×
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      </div>
+
+      <!-- Right Column: Chat -->
+      <div class="right-column">
+        <section class="chat-section">
+          <div class="chat-header">
+            <h2>Chat with Documents</h2>
+            <div class="chat-controls">
+              {#if availableModels.length > 0}
+                <select bind:value={selectedModel} class="model-select">
+                  {#each availableModels as model}
+                    <option value={model}>{model}</option>
+                  {/each}
+                </select>
+              {/if}
+              <button on:click={clearChat} class="clear-btn" disabled={chatMessages.length === 0}>
+                Clear Chat
+              </button>
+            </div>
+          </div>
+
+          <div class="chat-container" bind:this={chatContainer}>
+            {#if chatMessages.length === 0}
+              <div class="chat-empty">
+                <p>Ask questions about your uploaded documents!</p>
+                {#if documents.length === 0}
+                  <p class="hint">Upload some documents first to get started.</p>
+                {/if}
+              </div>
+            {:else}
+              {#each chatMessages as msg}
+                <div class="message-wrapper {msg.type}">
+                  <div class="message-content">
+                    {#if msg.loading}
+                      <div class="typing-indicator">
+                        <span class="spinner"></span>
+                        Thinking...
+                      </div>
+                    {:else}
+                      <div class="message-text" class:error={msg.error}>
+                        {msg.content}
+                      </div>
+                      
+                      {#if msg.sources && msg.sources.length > 0}
+                        <div class="sources">
+                          <h4>Sources:</h4>
+                          {#each msg.sources as source}
+                            <div class="source-item">
+                              <div class="source-header">
+                                <span class="source-filename">{source.filename}</span>
+                                <span class="source-similarity">({(source.similarity * 100).toFixed(1)}% match)</span>
+                              </div>
+                              <div class="source-preview">{source.preview}</div>
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                      
+                      {#if msg.model}
+                        <div class="model-info">Model: {msg.model}</div>
+                      {/if}
+                    {/if}
+                  </div>
+                  <div class="message-time">{formatChatTime(msg.timestamp)}</div>
+                </div>
+              {/each}
+            {/if}
+          </div>
+
+          <div class="chat-input-area">
+            <div class="input-wrapper">
+              <textarea
+                bind:value={currentQuestion}
+                placeholder={documents.length > 0 ? "Ask a question about your documents..." : "Upload documents first to start chatting"}
+                disabled={isQuerying || documents.length === 0}
+                on:keypress={handleKeyPress}
+                rows="2"
+              ></textarea>
+              <button
+                on:click={handleChatSubmit}
+                disabled={!currentQuestion.trim() || isQuerying || documents.length === 0}
+                class="send-btn"
+              >
+                {#if isQuerying}
+                  <span class="spinner"></span>
+                {:else}
+                  Send
+                {/if}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
+  </main>
+{:else}
+  <!-- Loading state while checking authentication -->
+  <div class="auth-loading">
+    <div class="spinner"></div>
+    <p>Checking authentication...</p>
   </div>
-</main>
+{/if}
 
 <style>
   :global(body) {
@@ -508,6 +597,20 @@
     max-width: 1400px;
     margin: 0 auto;
     padding: 2rem;
+  }
+
+  .auth-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 50vh;
+    gap: 1rem;
+  }
+
+  .auth-loading p {
+    color: #666;
+    font-size: 1.1rem;
   }
 
   header {
@@ -579,7 +682,7 @@
   }
 
   .upload-area:hover {
-    border-color: #007bff;
+    border-color: #667eea;
   }
 
   input[type="file"] {
@@ -623,7 +726,7 @@
   }
 
   .upload-btn {
-    background: #007bff;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     border: none;
     padding: 0.75rem 1.5rem;
@@ -634,16 +737,19 @@
     align-items: center;
     gap: 0.5rem;
     margin: 0 auto;
-    transition: background-color 0.3s;
+    transition: all 0.2s;
   }
 
   .upload-btn:hover:not(:disabled) {
-    background: #0056b3;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
   }
 
   .upload-btn:disabled {
     background: #6c757d;
     cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
   }
 
   .section-header {
@@ -663,10 +769,12 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    transition: all 0.2s;
   }
 
   .refresh-btn:hover:not(:disabled) {
     background: #218838;
+    transform: translateY(-1px);
   }
 
   .loading, .empty-state {
@@ -713,10 +821,12 @@
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
+    transition: all 0.2s;
   }
 
   .delete-btn:hover {
     background: #c82333;
+    transform: scale(1.1);
   }
 
   /* Chat Styles */
@@ -756,6 +866,7 @@
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.8rem;
+    transition: all 0.2s;
   }
 
   .clear-btn:hover:not(:disabled) {
@@ -809,7 +920,7 @@
   }
 
   .message-wrapper.user .message-content {
-    background: #007bff;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
   }
 
@@ -870,7 +981,7 @@
   .source-filename {
     font-weight: 500;
     font-size: 0.8rem;
-    color: #007bff;
+    color: #667eea;
   }
 
   .source-similarity {
@@ -910,15 +1021,16 @@
     resize: none;
     font-family: inherit;
     font-size: 0.9rem;
+    transition: border-color 0.2s;
   }
 
   .input-wrapper textarea:focus {
     outline: none;
-    border-color: #007bff;
+    border-color: #667eea;
   }
 
   .send-btn {
-    background: #007bff;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     border: none;
     padding: 0.75rem 1rem;
@@ -928,15 +1040,19 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.9rem;
+    transition: all 0.2s;
   }
 
   .send-btn:hover:not(:disabled) {
-    background: #0056b3;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
   }
 
   .send-btn:disabled {
     background: #6c757d;
     cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
   }
 
   .spinner {
