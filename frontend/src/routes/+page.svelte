@@ -1,1097 +1,637 @@
 <script>
-  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import Navbar from '$lib/components/Navbar.svelte';
 
-  // API base URL - adjust this to match your backend
-  const API_BASE = 'http://localhost:8000';
-
-  // Authentication state
   let isAuthenticated = false;
-  let user = null;
 
-  // State variables
-  let files = [];
-  let documents = [];
-  let uploading = false;
-  let loading = false;
-  let message = '';
-  let messageType = '';
-
-  // Chat state
-  let chatMessages = [];
-  let currentQuestion = '';
-  let isQuerying = false;
-  let availableModels = [];
-  let selectedModel = 'qwen3:0.6b';
-
-  // File input reference
-  let fileInput;
-  let chatContainer;
-
-  // Load documents and models on component mount
   onMount(() => {
-    checkAuthentication();
-  });
-
-  function checkAuthentication() {
     if (browser) {
       const token = localStorage.getItem('access_token');
-      const userData = localStorage.getItem('user');
-      
-      if (token && userData) {
-        try {
-          user = JSON.parse(userData);
-          isAuthenticated = true;
-          loadDocuments();
-          loadAvailableModels();
-        } catch (error) {
-          console.error('Error parsing user data:', error);
-          redirectToSignIn();
-        }
-      } else {
-        redirectToSignIn();
+      if (token) {
+        isAuthenticated = true;
       }
+    }
+  });
+
+  function navigateToApp() {
+    if (isAuthenticated) {
+      goto('/app');
+    } else {
+      goto('/sign');
     }
   }
 
-  function redirectToSignIn() {
+  function navigateToSignIn() {
     goto('/sign');
-  }
-
-  // Handle file selection
-  function handleFileSelect(event) {
-    files = Array.from(event.target.files).filter(file => 
-      file.type === 'application/pdf'
-    );
-    
-    if (files.length === 0) {
-      showMessage('Please select at least one PDF file', 'error');
-    }
-  }
-
-  // Upload single PDF
-  async function uploadSinglePDF(file) {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const token = localStorage.getItem('access_token');
-    const response = await fetch(`${API_BASE}/upload-pdf/`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
-      body: formData
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        redirectToSignIn();
-        return;
-      }
-      const error = await response.json();
-      throw new Error(error.detail || 'Upload failed');
-    }
-
-    return await response.json();
-  }
-
-  // Upload multiple PDFs
-  async function uploadMultiplePDFs() {
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append('files', file);
-    });
-
-    const token = localStorage.getItem('access_token');
-    const response = await fetch(`${API_BASE}/upload-multiple-pdfs/`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      },
-      body: formData
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        redirectToSignIn();
-        return;
-      }
-      const error = await response.json();
-      throw new Error(error.detail || 'Upload failed');
-    }
-
-    return await response.json();
-  }
-
-  // Handle upload
-  async function handleUpload() {
-    if (files.length === 0) {
-      showMessage('Please select files to upload', 'error');
-      return;
-    }
-
-    uploading = true;
-    message = '';
-
-    try {
-      let result;
-      
-      if (files.length === 1) {
-        result = await uploadSinglePDF(files[0]);
-        showMessage(`PDF processed successfully! ${result.chunks_processed} chunks created.`, 'success');
-      } else {
-        result = await uploadMultiplePDFs();
-        const successCount = result.results.filter(r => r.status === 'success').length;
-        const errorCount = result.results.filter(r => r.status === 'error').length;
-        
-        if (errorCount === 0) {
-          showMessage(`All ${successCount} PDFs processed successfully!`, 'success');
-        } else {
-          showMessage(`${successCount} PDFs processed, ${errorCount} failed.`, 'warning');
-        }
-      }
-
-      // Clear files and reload documents
-      files = [];
-      fileInput.value = '';
-      await loadDocuments();
-
-    } catch (error) {
-      showMessage(`Upload failed: ${error.message}`, 'error');
-    } finally {
-      uploading = false;
-    }
-  }
-
-  // Load documents list
-  async function loadDocuments() {
-    loading = true;
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE}/documents/`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      if (!response.ok) {
-        if (response.status === 401) {
-          redirectToSignIn();
-          return;
-        }
-        throw new Error('Failed to load documents');
-      }
-      
-      const data = await response.json();
-      documents = data.documents;
-    } catch (error) {
-      showMessage(`Failed to load documents: ${error.message}`, 'error');
-    } finally {
-      loading = false;
-    }
-  }
-
-  // Load available models
-  async function loadAvailableModels() {
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE}/ollama/models`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        availableModels = data.models;
-      }
-    } catch (error) {
-      console.log('Could not load available models:', error);
-    }
-  }
-
-  // Delete document
-  async function deleteDocument(documentId) {
-    if (!confirm('Are you sure you want to delete this document?')) {
-      return;
-    }
-
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE}/documents/${documentId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          redirectToSignIn();
-          return;
-        }
-        throw new Error('Failed to delete document');
-      }
-
-      showMessage('Document deleted successfully', 'success');
-      await loadDocuments();
-    } catch (error) {
-      showMessage(`Failed to delete document: ${error.message}`, 'error');
-    }
-  }
-
-  // Handle chat submission
-  async function handleChatSubmit() {
-    if (!currentQuestion.trim() || isQuerying) return;
-    
-    if (documents.length === 0) {
-      showMessage('Please upload documents first before asking questions', 'error');
-      return;
-    }
-
-    const question = currentQuestion.trim();
-    currentQuestion = '';
-    
-    // Add user message
-    chatMessages = [...chatMessages, {
-      type: 'user',
-      content: question,
-      timestamp: new Date()
-    }];
-
-    // Add loading message
-    const loadingMessageId = Date.now();
-    chatMessages = [...chatMessages, {
-      id: loadingMessageId,
-      type: 'assistant',
-      content: '',
-      loading: true,
-      timestamp: new Date()
-    }];
-
-    isQuerying = true;
-    scrollToBottom();
-
-    try {
-      const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE}/query/`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          question: question,
-          top_k: 5,
-          model: selectedModel
-        })
-      });
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          redirectToSignIn();
-          return;
-        }
-        const error = await response.json();
-        throw new Error(error.detail || 'Query failed');
-      }
-
-      const data = await response.json();
-
-      // Remove loading message and add actual response
-      chatMessages = chatMessages.filter(msg => msg.id !== loadingMessageId);
-      chatMessages = [...chatMessages, {
-        type: 'assistant',
-        content: data.answer,
-        sources: data.sources,
-        model: data.model_used,
-        timestamp: new Date()
-      }];
-
-    } catch (error) {
-      // Remove loading message and add error
-      chatMessages = chatMessages.filter(msg => msg.id !== loadingMessageId);
-      chatMessages = [...chatMessages, {
-        type: 'assistant',
-        content: `Error: ${error.message}`,
-        error: true,
-        timestamp: new Date()
-      }];
-    } finally {
-      isQuerying = false;
-      scrollToBottom();
-    }
-  }
-
-  // Clear chat
-  function clearChat() {
-    chatMessages = [];
-  }
-
-  // Scroll to bottom of chat
-  function scrollToBottom() {
-    setTimeout(() => {
-      if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-      }
-    }, 100);
-  }
-
-  // Handle enter key in chat input
-  function handleKeyPress(event) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      handleChatSubmit();
-    }
-  }
-
-  // Show message helper
-  function showMessage(text, type) {
-    message = text;
-    messageType = type;
-    setTimeout(() => {
-      message = '';
-      messageType = '';
-    }, 5000);
-  }
-
-  // Format file size
-  function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
-
-  // Format date
-  function formatDate(dateString) {
-    return new Date(dateString).toLocaleString();
-  }
-
-  // Format chat timestamp
-  function formatChatTime(date) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 </script>
 
 <svelte:head>
-  <title>RAG Pipeline - Document Manager & Chat</title>
+  <title>RAG Pipeline - Intelligent Document Chat</title>
+  <meta name="description" content="Upload your PDF documents and chat with them using AI. Get instant answers from your document collection with our RAG-powered system." />
 </svelte:head>
 
 <!-- Add Navbar -->
 <Navbar />
 
-<!-- Show content only if authenticated -->
-{#if isAuthenticated}
-  <main class="container">
-    <header>
-      <h1>Welcome back, {user?.full_name || 'User'}!</h1>
-      <p>Upload and manage PDF documents, then chat with your documents</p>
-    </header>
-
-    <!-- Message Display -->
-    {#if message}
-      <div class="message {messageType}">
-        {message}
-      </div>
-    {/if}
-
-    <div class="main-content">
-      <!-- Left Column: Upload & Documents -->
-      <div class="left-column">
-        <!-- Upload Section -->
-        <section class="upload-section">
-          <h2>Upload Documents</h2>
-          
-          <div class="upload-area">
-            <input
-              bind:this={fileInput}
-              type="file"
-              multiple
-              accept=".pdf"
-              on:change={handleFileSelect}
-              disabled={uploading}
-            />
-            
-            {#if files.length > 0}
-              <div class="selected-files">
-                <h3>Selected Files ({files.length}):</h3>
-                <ul>
-                  {#each files as file}
-                    <li>
-                      <span class="filename">{file.name}</span>
-                      <span class="filesize">({formatFileSize(file.size)})</span>
-                    </li>
-                  {/each}
-                </ul>
-              </div>
-            {/if}
-
-            <button
-              on:click={handleUpload}
-              disabled={uploading || files.length === 0}
-              class="upload-btn"
-            >
-              {#if uploading}
-                <span class="spinner"></span>
-                Processing...
-              {:else}
-                Upload {files.length > 1 ? `${files.length} PDFs` : 'PDF'}
-              {/if}
+<main class="landing">
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-text">
+          <h1>Chat with Your Documents</h1>
+          <p class="hero-subtitle">
+            Upload PDFs and get instant, intelligent answers from your document collection using our advanced RAG (Retrieval-Augmented Generation) system.
+          </p>
+          <div class="hero-buttons">
+            <button on:click={navigateToApp} class="cta-button primary">
+              {isAuthenticated ? 'Go to App' : 'Get Started'}
             </button>
-          </div>
-        </section>
-
-        <!-- Documents List -->
-        <section class="documents-section">
-          <div class="section-header">
-            <h2>Documents ({documents.length})</h2>
-            <button on:click={loadDocuments} disabled={loading} class="refresh-btn">
-              {#if loading}
-                <span class="spinner"></span>
-              {:else}
-                Refresh
-              {/if}
-            </button>
-          </div>
-
-          {#if loading}
-            <div class="loading">Loading documents...</div>
-          {:else if documents.length === 0}
-            <div class="empty-state">
-              <p>No documents uploaded yet. Upload your first PDF to get started!</p>
-            </div>
-          {:else}
-            <div class="documents-list">
-              {#each documents as doc}
-                <div class="document-item">
-                  <div class="document-info">
-                    <h4>{doc.filename}</h4>
-                    <p>{doc.chunk_count} chunks</p>
-                  </div>
-                  <button
-                    on:click={() => deleteDocument(doc.id)}
-                    class="delete-btn"
-                    title="Delete document"
-                  >
-                    ×
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </section>
-      </div>
-
-      <!-- Right Column: Chat -->
-      <div class="right-column">
-        <section class="chat-section">
-          <div class="chat-header">
-            <h2>Chat with Documents</h2>
-            <div class="chat-controls">
-              {#if availableModels.length > 0}
-                <select bind:value={selectedModel} class="model-select">
-                  {#each availableModels as model}
-                    <option value={model}>{model}</option>
-                  {/each}
-                </select>
-              {/if}
-              <button on:click={clearChat} class="clear-btn" disabled={chatMessages.length === 0}>
-                Clear Chat
+            {#if !isAuthenticated}
+              <button on:click={navigateToSignIn} class="cta-button secondary">
+                Sign In
               </button>
-            </div>
-          </div>
-
-          <div class="chat-container" bind:this={chatContainer}>
-            {#if chatMessages.length === 0}
-              <div class="chat-empty">
-                <p>Ask questions about your uploaded documents!</p>
-                {#if documents.length === 0}
-                  <p class="hint">Upload some documents first to get started.</p>
-                {/if}
-              </div>
-            {:else}
-              {#each chatMessages as msg}
-                <div class="message-wrapper {msg.type}">
-                  <div class="message-content">
-                    {#if msg.loading}
-                      <div class="typing-indicator">
-                        <span class="spinner"></span>
-                        Thinking...
-                      </div>
-                    {:else}
-                      <div class="message-text" class:error={msg.error}>
-                        {msg.content}
-                      </div>
-                      
-                      {#if msg.sources && msg.sources.length > 0}
-                        <div class="sources">
-                          <h4>Sources:</h4>
-                          {#each msg.sources as source}
-                            <div class="source-item">
-                              <div class="source-header">
-                                <span class="source-filename">{source.filename}</span>
-                                <span class="source-similarity">({(source.similarity * 100).toFixed(1)}% match)</span>
-                              </div>
-                              <div class="source-preview">{source.preview}</div>
-                            </div>
-                          {/each}
-                        </div>
-                      {/if}
-                      
-                      {#if msg.model}
-                        <div class="model-info">Model: {msg.model}</div>
-                      {/if}
-                    {/if}
-                  </div>
-                  <div class="message-time">{formatChatTime(msg.timestamp)}</div>
-                </div>
-              {/each}
             {/if}
           </div>
-
-          <div class="chat-input-area">
-            <div class="input-wrapper">
-              <textarea
-                bind:value={currentQuestion}
-                placeholder={documents.length > 0 ? "Ask a question about your documents..." : "Upload documents first to start chatting"}
-                disabled={isQuerying || documents.length === 0}
-                on:keypress={handleKeyPress}
-                rows="2"
-              ></textarea>
-              <button
-                on:click={handleChatSubmit}
-                disabled={!currentQuestion.trim() || isQuerying || documents.length === 0}
-                class="send-btn"
-              >
-                {#if isQuerying}
-                  <span class="spinner"></span>
-                {:else}
-                  Send
-                {/if}
-              </button>
+        </div>
+        <div class="hero-visual">
+          <div class="demo-card">
+            <div class="demo-header">
+              <div class="demo-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <span class="demo-title">Document Chat</span>
+            </div>
+            <div class="demo-content">
+              <div class="chat-bubble user">
+                What are the key findings in the research paper?
+              </div>
+              <div class="chat-bubble assistant">
+                Based on the uploaded research paper, the key findings include: improved accuracy by 23%, reduced processing time...
+              </div>
+              <div class="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
             </div>
           </div>
-        </section>
+        </div>
       </div>
     </div>
-  </main>
-{:else}
-  <!-- Loading state while checking authentication -->
-  <div class="auth-loading">
-    <div class="spinner"></div>
-    <p>Checking authentication...</p>
-  </div>
-{/if}
+  </section>
+
+  <!-- Features Section -->
+  <section class="features">
+    <div class="container">
+      <h2>Why Choose Our RAG System?</h2>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">📄</div>
+          <h3>PDF Upload & Processing</h3>
+          <p>Upload multiple PDF documents simultaneously. Our system automatically processes and chunks your documents for optimal retrieval.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🤖</div>
+          <h3>AI-Powered Chat</h3>
+          <p>Ask natural language questions about your documents. Get accurate, contextual answers powered by advanced language models.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔍</div>
+          <h3>Smart Document Search</h3>
+          <p>Intelligent semantic search finds relevant information across all your documents, with source citations for verification.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <h3>Multiple AI Models</h3>
+          <p>Choose from various AI models including Qwen and others. Switch between models to find the best fit for your needs.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔒</div>
+          <h3>Secure & Private</h3>
+          <p>Your documents are securely stored and processed. User authentication ensures your data remains private and protected.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📊</div>
+          <h3>Document Management</h3>
+          <p>Organize, view, and manage your document collection. Track processing status and delete documents as needed.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works Section -->
+  <section class="how-it-works">
+    <div class="container">
+      <h2>How It Works</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <h3>Upload Documents</h3>
+            <p>Upload your PDF files to our secure platform. Support for single or multiple file uploads.</p>
+          </div>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <h3>AI Processing</h3>
+            <p>Our system automatically processes and chunks your documents for optimal retrieval and understanding.</p>
+          </div>
+        </div>
+        <div class="step-arrow">→</div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <h3>Ask Questions</h3>
+            <p>Chat naturally with your documents. Get instant, accurate answers with source citations.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta-section">
+    <div class="container">
+      <div class="cta-content">
+        <h2>Ready to Transform Your Document Experience?</h2>
+        <p>Join thousands of users who are already chatting with their documents using our RAG system.</p>
+        <button on:click={navigateToApp} class="cta-button primary large">
+          {isAuthenticated ? 'Go to Dashboard' : 'Start Free Trial'}
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-content">
+        <div class="footer-section">
+          <h4>RAG Pipeline</h4>
+          <p>Intelligent document chat powered by AI</p>
+        </div>
+        <div class="footer-section">
+          <h4>Features</h4>
+          <ul>
+            <li>PDF Upload</li>
+            <li>AI Chat</li>
+            <li>Document Management</li>
+            <li>Multiple Models</li>
+          </ul>
+        </div>
+        <div class="footer-section">
+          <h4>Getting Started</h4>
+          <ul>
+            <li><button on:click={navigateToSignIn} class="footer-link">Sign Up</button></li>
+            <li><button on:click={navigateToSignIn} class="footer-link">Sign In</button></li>
+            <li><button on:click={navigateToApp} class="footer-link">Dashboard</button></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 RAG Pipeline. All rights reserved.</p>
+      </div>
+    </div>
+  </footer>
+</main>
 
 <style>
   :global(body) {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: #f5f5f5;
+    line-height: 1.6;
+    color: #333;
+    /* Enable scrolling for landing page */
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .landing {
+    /* Account for navbar height */
+    padding-top: 0;
+    min-height: 100vh;
   }
 
   .container {
-    max-width: 1400px;
+    max-width: 1200px;
     margin: 0 auto;
-    padding: 2rem;
+    padding: 0 2rem;
   }
 
-  .auth-loading {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 50vh;
-    gap: 1rem;
-  }
-
-  .auth-loading p {
-    color: #666;
-    font-size: 1.1rem;
-  }
-
-  header {
-    text-align: center;
-    margin-bottom: 2rem;
-  }
-
-  header h1 {
-    color: #333;
-    margin-bottom: 0.5rem;
-  }
-
-  header p {
-    color: #666;
-    font-size: 1.1rem;
-  }
-
-  .message {
-    padding: 1rem;
-    border-radius: 8px;
-    margin-bottom: 2rem;
-    font-weight: 500;
-  }
-
-  .message.success {
-    background-color: #d4edda;
-    color: #155724;
-    border: 1px solid #c3e6cb;
-  }
-
-  .message.error {
-    background-color: #f8d7da;
-    color: #721c24;
-    border: 1px solid #f5c6cb;
-  }
-
-  .message.warning {
-    background-color: #fff3cd;
-    color: #856404;
-    border: 1px solid #ffeaa7;
-  }
-
-  .main-content {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 2rem;
-    align-items: start;
-  }
-
-  .left-column, .right-column {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-  }
-
-  .upload-section, .documents-section, .chat-section {
-    background: white;
-    border-radius: 12px;
-    padding: 1.5rem;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-  }
-
-  .upload-area {
-    border: 2px dashed #ddd;
-    border-radius: 8px;
-    padding: 1.5rem;
-    text-align: center;
-    transition: border-color 0.3s;
-  }
-
-  .upload-area:hover {
-    border-color: #667eea;
-  }
-
-  input[type="file"] {
-    margin-bottom: 1rem;
-    padding: 0.5rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    width: 100%;
-    max-width: 300px;
-  }
-
-  .selected-files {
-    margin: 1rem 0;
-    text-align: left;
-    max-width: 300px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-
-  .selected-files ul {
-    list-style: none;
-    padding: 0;
-  }
-
-  .selected-files li {
-    padding: 0.5rem;
-    background: #f8f9fa;
-    margin: 0.25rem 0;
-    border-radius: 4px;
-    display: flex;
-    justify-content: space-between;
-  }
-
-  .filename {
-    font-weight: 500;
-  }
-
-  .filesize {
-    color: #666;
-    font-size: 0.9rem;
-  }
-
-  .upload-btn {
+  /* Hero Section */
+  .hero {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
-    border: none;
-    padding: 0.75rem 1.5rem;
-    border-radius: 6px;
+    padding: 4rem 0;
+    min-height: calc(100vh - 64px); /* Subtract navbar height */
+    display: flex;
+    align-items: center;
+  }
+
+  .hero-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4rem;
+    align-items: center;
+  }
+
+  .hero-text h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    margin-bottom: 1.5rem;
+    line-height: 1.2;
+  }
+
+  .hero-subtitle {
+    font-size: 1.25rem;
+    margin-bottom: 2rem;
+    opacity: 0.9;
+    line-height: 1.6;
+  }
+
+  .hero-buttons {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .cta-button {
+    padding: 1rem 2rem;
+    border-radius: 8px;
+    font-size: 1.1rem;
+    font-weight: 600;
     cursor: pointer;
-    font-size: 1rem;
-    display: flex;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    border: none;
+    display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    margin: 0 auto;
-    transition: all 0.2s;
+    justify-content: center;
   }
 
-  .upload-btn:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  .cta-button.primary {
+    background: white;
+    color: #667eea;
   }
 
-  .upload-btn:disabled {
-    background: #6c757d;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
+  .cta-button.primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.2);
   }
 
-  .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-  }
-
-  .refresh-btn {
-    background: #28a745;
+  .cta-button.secondary {
+    background: transparent;
     color: white;
-    border: none;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
-    cursor: pointer;
+    border: 2px solid white;
+  }
+
+  .cta-button.secondary:hover {
+    background: white;
+    color: #667eea;
+  }
+
+  .cta-button.large {
+    padding: 1.25rem 2.5rem;
+    font-size: 1.2rem;
+  }
+
+  /* Demo Visual */
+  .hero-visual {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    transition: all 0.2s;
+    justify-content: center;
   }
 
-  .refresh-btn:hover:not(:disabled) {
-    background: #218838;
-    transform: translateY(-1px);
+  .demo-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    width: 400px;
+    overflow: hidden;
   }
 
-  .loading, .empty-state {
-    text-align: center;
-    padding: 1.5rem;
-    color: #666;
-  }
-
-  .documents-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .document-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.75rem;
+  .demo-header {
     background: #f8f9fa;
-    border-radius: 6px;
-    border: 1px solid #e9ecef;
-  }
-
-  .document-info h4 {
-    margin: 0 0 0.25rem 0;
-    font-size: 0.9rem;
-    color: #333;
-  }
-
-  .document-info p {
-    margin: 0;
-    font-size: 0.8rem;
-    color: #666;
-  }
-
-  .delete-btn {
-    background: #dc3545;
-    color: white;
-    border: none;
-    border-radius: 50%;
-    width: 24px;
-    height: 24px;
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    transition: all 0.2s;
-  }
-
-  .delete-btn:hover {
-    background: #c82333;
-    transform: scale(1.1);
-  }
-
-  /* Chat Styles */
-  .chat-section {
-    height: 600px;
+    padding: 1rem;
     display: flex;
-    flex-direction: column;
-  }
-
-  .chat-header {
-    display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid #eee;
+    gap: 1rem;
+    border-bottom: 1px solid #e9ecef;
   }
 
-  .chat-controls {
+  .demo-dots {
     display: flex;
     gap: 0.5rem;
-    align-items: center;
   }
 
-  .model-select {
-    padding: 0.25rem 0.5rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 0.8rem;
+  .demo-dots span {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #dee2e6;
   }
 
-  .clear-btn {
-    background: #6c757d;
-    color: white;
-    border: none;
-    padding: 0.25rem 0.75rem;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    transition: all 0.2s;
+  .demo-title {
+    color: #666;
+    font-weight: 500;
   }
 
-  .clear-btn:hover:not(:disabled) {
-    background: #5a6268;
-  }
-
-  .clear-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .chat-container {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1rem 0;
+  .demo-content {
+    padding: 1.5rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
   }
 
-  .chat-empty {
-    text-align: center;
-    color: #666;
-    padding: 2rem;
-  }
-
-  .chat-empty .hint {
+  .chat-bubble {
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    max-width: 80%;
     font-size: 0.9rem;
-    color: #999;
-    margin-top: 0.5rem;
   }
 
-  .message-wrapper {
-    display: flex;
-    flex-direction: column;
-    max-width: 85%;
-  }
-
-  .message-wrapper.user {
+  .chat-bubble.user {
+    background: #667eea;
+    color: white;
     align-self: flex-end;
   }
 
-  .message-wrapper.assistant {
-    align-self: flex-start;
-  }
-
-  .message-content {
-    padding: 0.75rem 1rem;
-    border-radius: 12px;
-    position: relative;
-  }
-
-  .message-wrapper.user .message-content {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-  }
-
-  .message-wrapper.assistant .message-content {
+  .chat-bubble.assistant {
     background: #f1f3f4;
     color: #333;
-  }
-
-  .message-text.error {
-    color: #dc3545;
-  }
-
-  .message-time {
-    font-size: 0.7rem;
-    color: #999;
-    margin-top: 0.25rem;
-    padding: 0 0.5rem;
-  }
-
-  .message-wrapper.user .message-time {
-    text-align: right;
+    align-self: flex-start;
   }
 
   .typing-indicator {
     display: flex;
+    gap: 0.25rem;
+    align-self: flex-start;
+    padding: 0.75rem;
+  }
+
+  .typing-indicator span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #667eea;
+    animation: typing 1.4s infinite ease-in-out;
+  }
+
+  .typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  @keyframes typing {
+    0%, 60%, 100% {
+      transform: translateY(0);
+      opacity: 0.5;
+    }
+    30% {
+      transform: translateY(-10px);
+      opacity: 1;
+    }
+  }
+
+  /* Features Section */
+  .features {
+    padding: 5rem 0;
+    background: #f8f9fa;
+  }
+
+  .features h2 {
+    text-align: center;
+    font-size: 2.5rem;
+    margin-bottom: 3rem;
+    color: #333;
+  }
+
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 2rem;
+  }
+
+  .feature-card {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    text-align: center;
+    transition: transform 0.3s ease;
+  }
+
+  .feature-card:hover {
+    transform: translateY(-5px);
+  }
+
+  .feature-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+  }
+
+  .feature-card h3 {
+    color: #333;
+    margin-bottom: 1rem;
+    font-size: 1.3rem;
+  }
+
+  .feature-card p {
+    color: #666;
+    line-height: 1.6;
+  }
+
+  /* How It Works Section */
+  .how-it-works {
+    padding: 5rem 0;
+    background: white;
+  }
+
+  .how-it-works h2 {
+    text-align: center;
+    font-size: 2.5rem;
+    margin-bottom: 3rem;
+    color: #333;
+  }
+
+  .steps {
+    display: flex;
     align-items: center;
-    gap: 0.5rem;
-    color: #666;
+    justify-content: center;
+    gap: 2rem;
+    flex-wrap: wrap;
   }
 
-  .sources {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid #ddd;
+  .step {
+    text-align: center;
+    max-width: 250px;
   }
 
-  .sources h4 {
-    margin: 0 0 0.5rem 0;
-    font-size: 0.8rem;
-    color: #666;
+  .step-number {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: bold;
+    margin: 0 auto 1rem;
   }
 
-  .source-item {
-    background: #fff;
-    border: 1px solid #e9ecef;
-    border-radius: 6px;
-    padding: 0.5rem;
+  .step-content h3 {
+    color: #333;
     margin-bottom: 0.5rem;
   }
 
-  .source-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.25rem;
-  }
-
-  .source-filename {
-    font-weight: 500;
-    font-size: 0.8rem;
-    color: #667eea;
-  }
-
-  .source-similarity {
-    font-size: 0.7rem;
+  .step-content p {
     color: #666;
+    font-size: 0.95rem;
   }
 
-  .source-preview {
-    font-size: 0.75rem;
-    color: #555;
-    line-height: 1.3;
+  .step-arrow {
+    font-size: 2rem;
+    color: #667eea;
+    font-weight: bold;
   }
 
-  .model-info {
-    font-size: 0.7rem;
-    color: #999;
-    margin-top: 0.5rem;
-    text-align: right;
-  }
-
-  .chat-input-area {
-    padding-top: 1rem;
-    border-top: 1px solid #eee;
-  }
-
-  .input-wrapper {
-    display: flex;
-    gap: 0.5rem;
-    align-items: flex-end;
-  }
-
-  .input-wrapper textarea {
-    flex: 1;
-    padding: 0.75rem;
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    resize: none;
-    font-family: inherit;
-    font-size: 0.9rem;
-    transition: border-color 0.2s;
-  }
-
-  .input-wrapper textarea:focus {
-    outline: none;
-    border-color: #667eea;
-  }
-
-  .send-btn {
+  /* CTA Section */
+  .cta-section {
+    padding: 5rem 0;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
+    text-align: center;
+  }
+
+  .cta-content h2 {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .cta-content p {
+    font-size: 1.2rem;
+    margin-bottom: 2rem;
+    opacity: 0.9;
+  }
+
+  /* Footer */
+  .footer {
+    background: #2c3e50;
+    color: white;
+    padding: 3rem 0 1rem;
+  }
+
+  .footer-content {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 2rem;
+    margin-bottom: 2rem;
+  }
+
+  .footer-section h4 {
+    margin-bottom: 1rem;
+    color: #ecf0f1;
+  }
+
+  .footer-section ul {
+    list-style: none;
+    padding: 0;
+  }
+
+  .footer-section li {
+    margin-bottom: 0.5rem;
+  }
+
+  .footer-link {
+    background: none;
     border: none;
-    padding: 0.75rem 1rem;
-    border-radius: 8px;
+    color: #bdc3c7;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.9rem;
-    transition: all 0.2s;
+    padding: 0;
+    font-size: inherit;
+    text-decoration: underline;
   }
 
-  .send-btn:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  .footer-link:hover {
+    color: white;
   }
 
-  .send-btn:disabled {
-    background: #6c757d;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
+  .footer-bottom {
+    border-top: 1px solid #34495e;
+    padding-top: 1rem;
+    text-align: center;
+    color: #bdc3c7;
   }
 
-  .spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid transparent;
-    border-top: 2px solid currentColor;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-
-  @media (max-width: 1024px) {
-    .main-content {
-      grid-template-columns: 1fr;
-    }
-    
-    .chat-section {
-      height: 500px;
-    }
-  }
-
+  /* Responsive Design */
   @media (max-width: 768px) {
     .container {
-      padding: 1rem;
+      padding: 0 1rem;
     }
 
-    .chat-header {
+    .hero {
+      min-height: calc(100vh - 64px);
+      padding: 2rem 0;
+    }
+
+    .hero-content {
+      grid-template-columns: 1fr;
+      text-align: center;
+      gap: 2rem;
+    }
+
+    .hero-text h1 {
+      font-size: 2.5rem;
+    }
+
+    .demo-card {
+      width: 100%;
+      max-width: 350px;
+    }
+
+    .steps {
       flex-direction: column;
-      gap: 1rem;
-      align-items: stretch;
     }
 
-    .chat-controls {
-      justify-content: space-between;
+    .step-arrow {
+      transform: rotate(90deg);
+    }
+
+    .hero-buttons {
+      justify-content: center;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .hero-text h1 {
+      font-size: 2rem;
+    }
+
+    .hero-subtitle {
+      font-size: 1.1rem;
+    }
+
+    .cta-button {
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+    }
+
+    .features h2,
+    .how-it-works h2,
+    .cta-content h2 {
+      font-size: 2rem;
     }
   }
 </style>
