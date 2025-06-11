@@ -21,6 +21,27 @@
     Search
   } from 'lucide-svelte';
 
+  // Import markdown and syntax highlighting libraries
+  import { marked } from 'marked';
+  import hljs from 'highlight.js/lib/core';
+  import javascript from 'highlight.js/lib/languages/javascript';
+  import python from 'highlight.js/lib/languages/python';
+  import css from 'highlight.js/lib/languages/css';
+  import html from 'highlight.js/lib/languages/xml';
+  import json from 'highlight.js/lib/languages/json';
+  import sql from 'highlight.js/lib/languages/sql';
+  import bash from 'highlight.js/lib/languages/bash';
+
+  // Register languages
+  hljs.registerLanguage('javascript', javascript);
+  hljs.registerLanguage('python', python);
+  hljs.registerLanguage('css', css);
+  hljs.registerLanguage('html', html);
+  hljs.registerLanguage('xml', html);
+  hljs.registerLanguage('json', json);
+  hljs.registerLanguage('sql', sql);
+  hljs.registerLanguage('bash', bash);
+
   // API base URL - adjust this to match your backend
   const API_BASE = 'http://localhost:8000';
 
@@ -47,8 +68,95 @@
   let fileInput;
   let chatContainer;
 
+  // Configure marked with extensions for better markdown support
+  function configureMarked() {
+    const markedOptions = {
+      breaks: true,
+      gfm: true,
+      headerIds: false,
+      mangle: false,
+      highlight: function(code, lang) {
+        if (lang && hljs.getLanguage(lang)) {
+          try {
+            return hljs.highlight(code, { language: lang }).value;
+          } catch (err) {
+            console.warn('Syntax highlighting failed:', err);
+          }
+        }
+        return hljs.highlightAuto(code).value;
+      },
+      extensions: [{
+        name: 'think',
+        level: 'block',
+        start(src) {
+          return src.indexOf('<think>');
+        },
+        tokenizer(src) {
+          const match = src.match(/^\s*<think>([\s\S]*?)(<\/think>|\[TOOL_REQUEST$)/);
+          if (match) {
+            return {
+              type: 'think',
+              raw: match[0],
+              text: match[1].trim(),
+              tokens: this.lexer.blockTokens(match[1].trim())
+            };
+          }
+          return false;
+        },
+        renderer(token) {
+          return `<div class="think">${marked.parser(token.tokens)}</div>`;
+        }
+      }],
+      hooks: {
+        postprocess(html) {
+          return html
+            .replace(/(<table>[\s\S]*?<\/table>)/g, '<div class="table-wrapper">$1</div>')
+            .replace(/(<pre><code(?: class="language-(\S+)")?>[\s\S]*?<\/code><\/pre>)/g, '<div class="code-block"><div class="code-header"><span class="language">$2</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>$1</div>')
+            .replace(/<p>\s*<\/p>/g, '');
+        }
+      }
+    };
+
+    marked.use(markedOptions);
+  }
+
+  // Convert markdown to HTML
+  async function markdownToHtml(markdown) {
+    if (!markdown) return '';
+    
+    try {
+      return marked.parse(markdown);
+    } catch (error) {
+      console.error('Markdown parsing error:', error);
+      return markdown; // Fallback to original text
+    }
+  }
+
+  // Copy code function (will be attached to window for onclick)
+  function setupCopyFunction() {
+    if (browser) {
+      window.copyCode = function(button) {
+        const codeBlock = button.closest('.code-block');
+        const code = codeBlock.querySelector('code');
+        if (code) {
+          navigator.clipboard.writeText(code.textContent).then(() => {
+            const originalText = button.textContent;
+            button.textContent = 'Copied!';
+            setTimeout(() => {
+              button.textContent = originalText;
+            }, 2000);
+          }).catch(err => {
+            console.error('Failed to copy code:', err);
+          });
+        }
+      };
+    }
+  }
+
   // Load documents and models on component mount
   onMount(() => {
+    configureMarked();
+    setupCopyFunction();
     checkAuthentication();
   });
 
@@ -276,15 +384,10 @@
     }
   }
 
-  // Handle chat submission
+  // Handle chat submission with streaming
   async function handleChatSubmit() {
     if (!currentQuestion.trim() || isQuerying) return;
     
-    if (documents.length === 0) {
-      showMessage('Please upload documents first before asking questions', 'error');
-      return;
-    }
-
     const question = currentQuestion.trim();
     currentQuestion = '';
     
@@ -295,13 +398,16 @@
       timestamp: new Date()
     }];
 
-    // Add loading message
-    const loadingMessageId = Date.now();
+    // Add streaming message placeholder
+    const streamingMessageId = Date.now();
     chatMessages = [...chatMessages, {
-      id: loadingMessageId,
+      id: streamingMessageId,
       type: 'assistant',
       content: '',
-      loading: true,
+      rawContent: '', // Store raw markdown
+      sources: [],
+      model: selectedModel,
+      streaming: true,
       timestamp: new Date()
     }];
 
@@ -310,17 +416,27 @@
 
     try {
       const token = localStorage.getItem('access_token');
-      const response = await fetch(`${API_BASE}/query/`, {
+      
+      // Choose endpoint based on whether documents are available
+      const endpoint = documents.length > 0 ? '/query/stream/' : '/chat/stream/';
+      const requestBody = documents.length > 0 
+        ? {
+            question: question,
+            top_k: 5,
+            model: selectedModel
+          }
+        : {
+            message: question,
+            model: selectedModel
+          };
+
+      const response = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
-          question: question,
-          top_k: 5,
-          model: selectedModel
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -332,21 +448,91 @@
         throw new Error(error.detail || 'Query failed');
       }
 
-      const data = await response.json();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedContent = '';
+      let sources = [];
+      let modelUsed = selectedModel;
 
-      // Remove loading message and add actual response
-      chatMessages = chatMessages.filter(msg => msg.id !== loadingMessageId);
-      chatMessages = [...chatMessages, {
-        type: 'assistant',
-        content: data.answer,
-        sources: data.sources,
-        model: data.model_used,
-        timestamp: new Date()
-      }];
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              switch (data.type) {
+                case 'sources':
+                  // Only set sources if we have documents
+                  if (documents.length > 0) {
+                    sources = data.data;
+                    chatMessages = chatMessages.map(msg => 
+                      msg.id === streamingMessageId 
+                        ? { ...msg, sources: sources }
+                        : msg
+                    );
+                  }
+                  break;
+                
+                case 'token':
+                  accumulatedContent += data.data;
+                  // Convert markdown to HTML for display
+                  const htmlContent = await markdownToHtml(accumulatedContent);
+                  chatMessages = chatMessages.map(msg => 
+                    msg.id === streamingMessageId 
+                      ? { 
+                          ...msg, 
+                          content: htmlContent,
+                          rawContent: accumulatedContent 
+                        }
+                      : msg
+                  );
+                  scrollToBottom();
+                  break;
+                
+                case 'done':
+                  modelUsed = data.data.model_used;
+                  const finalHtmlContent = await markdownToHtml(accumulatedContent);
+                  chatMessages = chatMessages.map(msg => 
+                    msg.id === streamingMessageId 
+                      ? { 
+                          ...msg, 
+                          content: finalHtmlContent,
+                          rawContent: accumulatedContent,
+                          sources: sources,
+                          model: modelUsed,
+                          streaming: false 
+                        }
+                      : msg
+                  );
+                  // Highlight code blocks after final render
+                  setTimeout(() => {
+                    if (browser) {
+                      hljs.highlightAll();
+                    }
+                  }, 100);
+                  break;
+                
+                case 'error':
+                  throw new Error(data.data);
+              }
+            } catch (parseError) {
+              console.warn('Failed to parse SSE data:', parseError);
+            }
+          }
+        }
+      }
 
     } catch (error) {
-      // Remove loading message and add error
-      chatMessages = chatMessages.filter(msg => msg.id !== loadingMessageId);
+      console.error('Streaming error:', error);
+      // Remove streaming message and add error
+      chatMessages = chatMessages.filter(msg => msg.id !== streamingMessageId);
       chatMessages = [...chatMessages, {
         type: 'assistant',
         content: `Error: ${error.message}`,
@@ -414,6 +600,8 @@
 <svelte:head>
   <title>RAG Pipeline - Document Manager & Chat</title>
   <meta name="description" content="Upload and chat with your PDF documents using AI">
+  <!-- Add highlight.js CSS -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 </svelte:head>
 
 <!-- Add Navbar -->
@@ -575,7 +763,7 @@
         <div class="chat-header">
           <div class="chat-title">
             <MessageCircle size={20} />
-            <h2>Chat with Documents</h2>
+            <h2>{documents.length > 0 ? 'Chat with Documents' : 'Chat with AI'}</h2>
           </div>
           <div class="chat-controls">
             {#if availableModels.length > 0}
@@ -604,9 +792,10 @@
             <div class="chat-empty">
               <Bot size={48} />
               <h3>Ready to help!</h3>
-              <p>Ask questions about your uploaded documents.</p>
-              {#if documents.length === 0}
-                <p class="hint">Upload some documents first to get started.</p>
+              {#if documents.length > 0}
+                <p>Ask questions about your uploaded documents.</p>
+              {:else}
+                <p>Ask me anything or upload documents for document-specific questions.</p>
               {/if}
             </div>
           {:else}
@@ -621,14 +810,22 @@
                     {/if}
                   </div>
                   <div class="message-content">
-                    {#if msg.loading}
+                    {#if msg.streaming && !msg.content}
                       <div class="typing-indicator">
                         <Loader2 size={14} class="spinner" />
                         <span>Thinking...</span>
                       </div>
                     {:else}
                       <div class="message-text" class:error={msg.error}>
-                        {msg.content}
+                        {#if msg.type === 'user'}
+                          {msg.content}
+                        {:else}
+                          <!-- Render HTML content for assistant messages -->
+                          {@html msg.content}
+                        {/if}
+                        {#if msg.streaming && msg.content}
+                          <span class="streaming-cursor">|</span>
+                        {/if}
                       </div>
                       
                       {#if msg.sources && msg.sources.length > 0}
@@ -678,15 +875,15 @@
           <div class="input-container">
             <textarea
               bind:value={currentQuestion}
-              placeholder={documents.length > 0 ? "Ask a question about your documents..." : "Upload documents first to start chatting"}
-              disabled={isQuerying || documents.length === 0}
+              placeholder={documents.length > 0 ? "Ask a question about your documents..." : "Ask me anything..."}
+              disabled={isQuerying}
               on:keypress={handleKeyPress}
               rows="1"
               class="chat-input"
             ></textarea>
             <button
               on:click={handleChatSubmit}
-              disabled={!currentQuestion.trim() || isQuerying || documents.length === 0}
+              disabled={!currentQuestion.trim() || isQuerying}
               class="send-btn"
               title="Send message"
             >
@@ -1700,4 +1897,245 @@
     outline: 2px solid var(--primary-600);
     outline-offset: 2px;
   }
+
+  /* Add streaming cursor animation */
+  .streaming-cursor {
+    display: inline-block;
+    animation: blink 1s infinite;
+    color: var(--primary-600);
+    font-weight: bold;
+  }
+
+  .message-user .streaming-cursor {
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  @keyframes blink {
+    0%, 50% {
+      opacity: 1;
+    }
+    51%, 100% {
+      opacity: 0;
+    }
+  }
+
+  /* Ensure smooth scrolling during streaming */
+  .chat-container {
+    scroll-behavior: smooth;
+  }
+
+  /* Add styles for markdown content */
+  :global(.message-text h1, .message-text h2, .message-text h3, .message-text h4, .message-text h5, .message-text h6) {
+    margin: 1em 0 0.5em 0;
+    color: var(--gray-900);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  :global(.message-user .message-text h1, .message-user .message-text h2, .message-user .message-text h3, .message-user .message-text h4, .message-user .message-text h5, .message-user .message-text h6) {
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  :global(.message-text p) {
+    margin: 0.75em 0;
+    line-height: 1.6;
+  }
+
+  :global(.message-text ul, .message-text ol) {
+    margin: 0.75em 0;
+    padding-left: 1.5em;
+  }
+
+  :global(.message-text li) {
+    margin: 0.25em 0;
+    line-height: 1.5;
+  }
+
+  :global(.message-text blockquote) {
+    margin: 1em 0;
+    padding: 0.75em 1em;
+    border-left: 4px solid var(--primary-600);
+    background: var(--gray-50);
+    border-radius: var(--border-radius);
+    font-style: italic;
+  }
+
+  :global(.message-user .message-text blockquote) {
+    border-left-color: rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Code block styles */
+  :global(.code-block) {
+    margin: 1em 0;
+    border-radius: var(--border-radius-lg);
+    background: var(--gray-900);
+    border: 1px solid var(--gray-200);
+    overflow: hidden;
+  }
+
+  :global(.code-header) {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    background: var(--gray-800);
+    border-bottom: 1px solid var(--gray-700);
+    font-size: 0.75rem;
+  }
+
+  :global(.language) {
+    color: var(--gray-300);
+    font-weight: 500;
+    text-transform: uppercase;
+  }
+
+  :global(.copy-btn) {
+    background: var(--gray-700);
+    color: var(--gray-300);
+    border: none;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--border-radius);
+    font-size: 0.6875rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  :global(.copy-btn:hover) {
+    background: var(--gray-600);
+    color: white;
+  }
+
+  :global(.code-block pre) {
+    margin: 0;
+    padding: 1rem;
+    background: transparent;
+    overflow-x: auto;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
+  :global(.code-block code) {
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    color: var(--gray-100);
+  }
+
+  /* Inline code */
+  :global(.message-text code:not(pre code)) {
+    background: var(--gray-100);
+    color: var(--gray-800);
+    padding: 0.125rem 0.375rem;
+    border-radius: var(--border-radius);
+    font-size: 0.875em;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  }
+
+  :global(.message-user .message-text code:not(pre code)) {
+    background: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  /* Table styles */
+  :global(.table-wrapper) {
+    margin: 1em 0;
+    overflow-x: auto;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--gray-200);
+  }
+
+  :global(.table-wrapper table) {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+
+  :global(.table-wrapper th) {
+    background: var(--gray-50);
+    padding: 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--gray-900);
+    border-bottom: 1px solid var(--gray-200);
+  }
+
+  :global(.table-wrapper td) {
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--gray-100);
+  }
+
+  :global(.table-wrapper tr:last-child td) {
+    border-bottom: none;
+  }
+
+  /* Thinking blocks */
+  :global(.think) {
+    margin: 1em 0;
+    padding: 1rem;
+    background: var(--gray-50);
+    border: 1px solid var(--gray-200);
+    border-radius: var(--border-radius-lg);
+    border-left: 4px solid var(--primary-600);
+    font-style: italic;
+    color: var(--gray-600);
+    position: relative;
+  }
+
+  :global(.think::before) {
+    content: "💭 Thinking...";
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--primary-600);
+    font-style: normal;
+  }
+
+  /* Links */
+  :global(.message-text a) {
+    color: var(--primary-600);
+    text-decoration: underline;
+    transition: color 0.2s ease;
+  }
+
+  :global(.message-text a:hover) {
+    color: var(--primary-700);
+  }
+
+  :global(.message-user .message-text a) {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  :global(.message-user .message-text a:hover) {
+    color: white;
+  }
+
+  /* Strong/Bold text */
+  :global(.message-text strong, .message-text b) {
+    font-weight: 600;
+    color: var(--gray-900);
+  }
+
+  :global(.message-user .message-text strong, .message-user .message-text b) {
+    color: white;
+  }
+
+  /* Emphasis/Italic text */
+  :global(.message-text em, .message-text i) {
+    font-style: italic;
+  }
+
+  /* Horizontal rules */
+  :global(.message-text hr) {
+    border: none;
+    border-top: 1px solid var(--gray-200);
+    margin: 1.5em 0;
+  }
+
+  :global(.message-user .message-text hr) {
+    border-top-color: rgba(255, 255, 255, 0.3);
+  }
+
+  /* ... rest of existing styles ... */
 </style>

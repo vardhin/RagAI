@@ -5,6 +5,10 @@
   import Navbar from '$lib/components/Navbar.svelte';
 
   let isAuthenticated = false;
+  let heroSection;
+  let featuresSection;
+  let stepsSection;
+  let ctaSection;
 
   onMount(() => {
     if (browser) {
@@ -12,8 +16,224 @@
       if (token) {
         isAuthenticated = true;
       }
+
+      // Load GSAP
+      loadGSAP().then(() => {
+        initAnimations();
+      });
     }
   });
+
+  async function loadGSAP() {
+    const gsap = await import('gsap');
+    const ScrollTrigger = await import('gsap/ScrollTrigger');
+    
+    gsap.default.registerPlugin(ScrollTrigger.default);
+    window.gsap = gsap.default;
+    window.ScrollTrigger = ScrollTrigger.default;
+  }
+
+  function initAnimations() {
+    // Hero section animations
+    const tl = gsap.timeline();
+    
+    // Initial state - hide elements
+    gsap.set(['.hero-text', '.hero-visual'], { opacity: 0, y: 50 });
+    gsap.set('.demo-card', { scale: 0.8, rotation: 5 });
+    gsap.set('.chat-bubble', { opacity: 0, x: -30 });
+    gsap.set('.typing-indicator', { opacity: 0 });
+
+    // Hero entrance animation
+    tl.to('.hero-text', {
+      duration: 1.2,
+      opacity: 1,
+      y: 0,
+      ease: "power3.out"
+    })
+    .to('.hero-visual', {
+      duration: 1,
+      opacity: 1,
+      y: 0,
+      ease: "power3.out"
+    }, "-=0.6")
+    .to('.demo-card', {
+      duration: 0.8,
+      scale: 1,
+      rotation: 0,
+      ease: "back.out(1.7)"
+    }, "-=0.4")
+    .to('.chat-bubble.user', {
+      duration: 0.6,
+      opacity: 1,
+      x: 0,
+      ease: "power2.out"
+    }, "-=0.2")
+    .to('.chat-bubble.assistant', {
+      duration: 0.6,
+      opacity: 1,
+      x: 0,
+      ease: "power2.out"
+    }, "+=0.5")
+    .to('.typing-indicator', {
+      duration: 0.4,
+      opacity: 1,
+      ease: "power2.out"
+    }, "+=0.3");
+
+    // Floating animation for demo card
+    gsap.to('.demo-card', {
+      duration: 3,
+      y: -10,
+      ease: "power1.inOut",
+      repeat: -1,
+      yoyo: true
+    });
+
+    // Features section animation
+    gsap.set('.feature-card', { opacity: 0, y: 50, scale: 0.9 });
+    
+    ScrollTrigger.create({
+      trigger: '.features',
+      start: "top 80%",
+      onEnter: () => {
+        gsap.to('.feature-card', {
+          duration: 0.8,
+          opacity: 1,
+          y: 0,
+          scale: 1,
+          stagger: 0.1,
+          ease: "power3.out"
+        });
+      }
+    });
+
+    // Feature cards hover animations
+    document.querySelectorAll('.feature-card').forEach(card => {
+      card.addEventListener('mouseenter', () => {
+        gsap.to(card, {
+          duration: 0.3,
+          y: -10,
+          scale: 1.02,
+          boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
+          ease: "power2.out"
+        });
+      });
+
+      card.addEventListener('mouseleave', () => {
+        gsap.to(card, {
+          duration: 0.3,
+          y: 0,
+          scale: 1,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
+          ease: "power2.out"
+        });
+      });
+    });
+
+    // Steps section animation
+    gsap.set('.step', { opacity: 0, y: 50 });
+    gsap.set('.step-arrow', { opacity: 0, scale: 0 });
+    
+    ScrollTrigger.create({
+      trigger: '.how-it-works',
+      start: "top 70%",
+      onEnter: () => {
+        const stepTl = gsap.timeline();
+        stepTl.to('.step', {
+          duration: 0.8,
+          opacity: 1,
+          y: 0,
+          stagger: 0.2,
+          ease: "power3.out"
+        })
+        .to('.step-arrow', {
+          duration: 0.5,
+          opacity: 1,
+          scale: 1,
+          stagger: 0.1,
+          ease: "back.out(1.7)"
+        }, "-=0.4");
+      }
+    });
+
+    // Step numbers pulsing animation
+    gsap.to('.step-number', {
+      duration: 2,
+      scale: 1.1,
+      ease: "power1.inOut",
+      repeat: -1,
+      yoyo: true,
+      stagger: 0.3
+    });
+
+    // CTA section animation
+    gsap.set('.cta-content > *', { opacity: 0, y: 30 });
+    
+    ScrollTrigger.create({
+      trigger: '.cta-section',
+      start: "top 80%",
+      onEnter: () => {
+        gsap.to('.cta-content > *', {
+          duration: 0.8,
+          opacity: 1,
+          y: 0,
+          stagger: 0.2,
+          ease: "power3.out"
+        });
+      }
+    });
+
+    // Button animations
+    document.querySelectorAll('.cta-button').forEach(button => {
+      button.addEventListener('mouseenter', () => {
+        gsap.to(button, {
+          duration: 0.3,
+          scale: 1.05,
+          ease: "power2.out"
+        });
+      });
+
+      button.addEventListener('mouseleave', () => {
+        gsap.to(button, {
+          duration: 0.3,
+          scale: 1,
+          ease: "power2.out"
+        });
+      });
+    });
+
+    // Parallax effect for hero background
+    ScrollTrigger.create({
+      trigger: '.hero',
+      start: "top top",
+      end: "bottom top",
+      scrub: 1,
+      onUpdate: (self) => {
+        gsap.to('.hero', {
+          duration: 0.3,
+          backgroundPosition: `50% ${50 + self.progress * 20}%`,
+          ease: "none"
+        });
+      }
+    });
+
+    // Footer animation
+    gsap.set('.footer-section', { opacity: 0, y: 30 });
+    
+    ScrollTrigger.create({
+      trigger: '.footer',
+      start: "top 90%",
+      onEnter: () => {
+        gsap.to('.footer-section', {
+          duration: 0.6,
+          opacity: 1,
+          y: 0,
+          stagger: 0.1,
+          ease: "power2.out"
+        });
+      }
+    });
+  }
 
   function navigateToApp() {
     if (isAuthenticated) {
@@ -31,6 +251,8 @@
 <svelte:head>
   <title>RAG Pipeline - Intelligent Document Chat</title>
   <meta name="description" content="Upload your PDF documents and chat with them using AI. Get instant answers from your document collection with our RAG-powered system." />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
 </svelte:head>
 
 <!-- Add Navbar -->
@@ -38,7 +260,8 @@
 
 <main class="landing">
   <!-- Hero Section -->
-  <section class="hero">
+  <section class="hero" bind:this={heroSection}>
+    <div class="hero-particles"></div>
     <div class="container">
       <div class="hero-content">
         <div class="hero-text">
@@ -87,7 +310,7 @@
   </section>
 
   <!-- Features Section -->
-  <section class="features">
+  <section class="features" bind:this={featuresSection}>
     <div class="container">
       <h2>Why Choose Our RAG System?</h2>
       <div class="features-grid">
@@ -126,7 +349,7 @@
   </section>
 
   <!-- How It Works Section -->
-  <section class="how-it-works">
+  <section class="how-it-works" bind:this={stepsSection}>
     <div class="container">
       <h2>How It Works</h2>
       <div class="steps">
@@ -158,7 +381,7 @@
   </section>
 
   <!-- CTA Section -->
-  <section class="cta-section">
+  <section class="cta-section" bind:this={ctaSection}>
     <div class="container">
       <div class="cta-content">
         <h2>Ready to Transform Your Document Experience?</h2>
@@ -209,13 +432,11 @@
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     line-height: 1.6;
     color: #333;
-    /* Enable scrolling for landing page */
     overflow-y: auto;
     overflow-x: hidden;
   }
 
   .landing {
-    /* Account for navbar height */
     padding-top: 0;
     min-height: 100vh;
   }
@@ -226,14 +447,35 @@
     padding: 0 2rem;
   }
 
-  /* Hero Section */
+  /* Hero Section with enhanced animations */
   .hero {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     padding: 4rem 0;
-    min-height: calc(100vh - 64px); /* Subtract navbar height */
+    min-height: calc(100vh - 64px);
     display: flex;
     align-items: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .hero-particles {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at 20% 80%, rgba(255,255,255,0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(255,255,255,0.1) 0%, transparent 50%),
+                radial-gradient(circle at 40% 40%, rgba(255,255,255,0.05) 0%, transparent 50%);
+    pointer-events: none;
+    animation: particleFloat 20s ease-in-out infinite;
+  }
+
+  @keyframes particleFloat {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    33% { transform: translateY(-20px) rotate(1deg); }
+    66% { transform: translateY(10px) rotate(-1deg); }
   }
 
   .hero-content {
@@ -241,6 +483,8 @@
     grid-template-columns: 1fr 1fr;
     gap: 4rem;
     align-items: center;
+    position: relative;
+    z-index: 1;
   }
 
   .hero-text h1 {
@@ -248,6 +492,10 @@
     font-weight: 700;
     margin-bottom: 1.5rem;
     line-height: 1.2;
+    background: linear-gradient(45deg, #ffffff, #e8f4fd);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .hero-subtitle {
@@ -265,37 +513,56 @@
 
   .cta-button {
     padding: 1rem 2rem;
-    border-radius: 8px;
+    border-radius: 12px;
     font-size: 1.1rem;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     text-decoration: none;
     border: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cta-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+    transition: left 0.5s;
+  }
+
+  .cta-button:hover::before {
+    left: 100%;
   }
 
   .cta-button.primary {
-    background: white;
+    background: linear-gradient(135deg, #ffffff, #f8f9fa);
     color: #667eea;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
   }
 
   .cta-button.primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+    transform: translateY(-3px);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.2);
   }
 
   .cta-button.secondary {
     background: transparent;
     color: white;
-    border: 2px solid white;
+    border: 2px solid rgba(255,255,255,0.8);
+    backdrop-filter: blur(10px);
   }
 
   .cta-button.secondary:hover {
-    background: white;
-    color: #667eea;
+    background: rgba(255,255,255,0.1);
+    border-color: white;
   }
 
   .cta-button.large {
@@ -303,27 +570,29 @@
     font-size: 1.2rem;
   }
 
-  /* Demo Visual */
+  /* Enhanced Demo Visual */
   .hero-visual {
     display: flex;
     justify-content: center;
   }
 
   .demo-card {
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(20px);
+    border-radius: 16px;
+    box-shadow: 0 25px 80px rgba(0,0,0,0.3);
     width: 400px;
     overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.2);
   }
 
   .demo-header {
-    background: #f8f9fa;
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef);
     padding: 1rem;
     display: flex;
     align-items: center;
     gap: 1rem;
-    border-bottom: 1px solid #e9ecef;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
   }
 
   .demo-dots {
@@ -336,6 +605,15 @@
     height: 12px;
     border-radius: 50%;
     background: #dee2e6;
+    animation: dotPulse 2s ease-in-out infinite;
+  }
+
+  .demo-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .demo-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes dotPulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
   }
 
   .demo-title {
@@ -352,21 +630,24 @@
 
   .chat-bubble {
     padding: 0.75rem 1rem;
-    border-radius: 12px;
+    border-radius: 16px;
     max-width: 80%;
     font-size: 0.9rem;
+    position: relative;
   }
 
   .chat-bubble.user {
-    background: #667eea;
+    background: linear-gradient(135deg, #667eea, #764ba2);
     color: white;
     align-self: flex-end;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
   }
 
   .chat-bubble.assistant {
-    background: #f1f3f4;
+    background: linear-gradient(135deg, #f1f3f4, #e8eaed);
     color: #333;
     align-self: flex-start;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
   }
 
   .typing-indicator {
@@ -380,17 +661,12 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #667eea;
+    background: linear-gradient(135deg, #667eea, #764ba2);
     animation: typing 1.4s infinite ease-in-out;
   }
 
-  .typing-indicator span:nth-child(2) {
-    animation-delay: 0.2s;
-  }
-
-  .typing-indicator span:nth-child(3) {
-    animation-delay: 0.4s;
-  }
+  .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
 
   @keyframes typing {
     0%, 60%, 100% {
@@ -403,10 +679,10 @@
     }
   }
 
-  /* Features Section */
+  /* Enhanced Features Section */
   .features {
     padding: 5rem 0;
-    background: #f8f9fa;
+    background: linear-gradient(180deg, #f8f9fa 0%, #ffffff 100%);
   }
 
   .features h2 {
@@ -414,6 +690,10 @@
     font-size: 2.5rem;
     margin-bottom: 3rem;
     color: #333;
+    background: linear-gradient(135deg, #333, #667eea);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
 
   .features-grid {
@@ -425,19 +705,35 @@
   .feature-card {
     background: white;
     padding: 2rem;
-    border-radius: 12px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    border-radius: 16px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
     text-align: center;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid rgba(0,0,0,0.05);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, #667eea, #764ba2);
+    transform: scaleX(0);
     transition: transform 0.3s ease;
   }
 
-  .feature-card:hover {
-    transform: translateY(-5px);
+  .feature-card:hover::before {
+    transform: scaleX(1);
   }
 
   .feature-icon {
     font-size: 3rem;
     margin-bottom: 1rem;
+    filter: drop-shadow(0 4px 8px rgba(0,0,0,0.1));
   }
 
   .feature-card h3 {
@@ -451,10 +747,24 @@
     line-height: 1.6;
   }
 
-  /* How It Works Section */
+  /* Enhanced How It Works Section */
   .how-it-works {
     padding: 5rem 0;
     background: white;
+    position: relative;
+  }
+
+  .how-it-works::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: 
+      radial-gradient(circle at 10% 20%, rgba(102, 126, 234, 0.05) 0%, transparent 50%),
+      radial-gradient(circle at 90% 80%, rgba(118, 75, 162, 0.05) 0%, transparent 50%);
+    pointer-events: none;
   }
 
   .how-it-works h2 {
@@ -462,6 +772,8 @@
     font-size: 2.5rem;
     margin-bottom: 3rem;
     color: #333;
+    position: relative;
+    z-index: 1;
   }
 
   .steps {
@@ -470,6 +782,8 @@
     justify-content: center;
     gap: 2rem;
     flex-wrap: wrap;
+    position: relative;
+    z-index: 1;
   }
 
   .step {
@@ -489,6 +803,26 @@
     font-size: 1.5rem;
     font-weight: bold;
     margin: 0 auto 1rem;
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+    position: relative;
+  }
+
+  .step-number::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: -5px;
+    width: calc(100% + 10px);
+    height: calc(100% + 10px);
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: -1;
+  }
+
+  .step:hover .step-number::before {
+    opacity: 0.2;
   }
 
   .step-content h3 {
@@ -505,19 +839,47 @@
     font-size: 2rem;
     color: #667eea;
     font-weight: bold;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.1);
   }
 
-  /* CTA Section */
+  /* Enhanced CTA Section */
   .cta-section {
     padding: 5rem 0;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cta-section::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: 
+      radial-gradient(circle at 20% 80%, rgba(255,255,255,0.1) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, rgba(255,255,255,0.1) 0%, transparent 50%);
+    pointer-events: none;
+    animation: ctaFloat 15s ease-in-out infinite;
+  }
+
+  @keyframes ctaFloat {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(-10px) scale(1.02); }
+  }
+
+  .cta-content {
+    position: relative;
+    z-index: 1;
   }
 
   .cta-content h2 {
     font-size: 2.5rem;
     margin-bottom: 1rem;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.1);
   }
 
   .cta-content p {
@@ -526,11 +888,22 @@
     opacity: 0.9;
   }
 
-  /* Footer */
+  /* Enhanced Footer */
   .footer {
-    background: #2c3e50;
+    background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
     color: white;
     padding: 3rem 0 1rem;
+    position: relative;
+  }
+
+  .footer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, #667eea, #764ba2);
   }
 
   .footer-content {
@@ -543,6 +916,7 @@
   .footer-section h4 {
     margin-bottom: 1rem;
     color: #ecf0f1;
+    font-size: 1.1rem;
   }
 
   .footer-section ul {
@@ -561,15 +935,16 @@
     cursor: pointer;
     padding: 0;
     font-size: inherit;
-    text-decoration: underline;
+    text-decoration: none;
+    transition: color 0.3s ease;
   }
 
   .footer-link:hover {
-    color: white;
+    color: #667eea;
   }
 
   .footer-bottom {
-    border-top: 1px solid #34495e;
+    border-top: 1px solid rgba(255,255,255,0.1);
     padding-top: 1rem;
     text-align: center;
     color: #bdc3c7;
@@ -633,5 +1008,28 @@
     .cta-content h2 {
       font-size: 2rem;
     }
+  }
+
+  /* Smooth scrolling */
+  :global(html) {
+    scroll-behavior: smooth;
+  }
+
+  /* Custom scrollbar */
+  :global(::-webkit-scrollbar) {
+    width: 8px;
+  }
+
+  :global(::-webkit-scrollbar-track) {
+    background: #f1f1f1;
+  }
+
+  :global(::-webkit-scrollbar-thumb) {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    border-radius: 4px;
+  }
+
+  :global(::-webkit-scrollbar-thumb:hover) {
+    background: linear-gradient(135deg, #5a6fd8, #6a4c93);
   }
 </style>
