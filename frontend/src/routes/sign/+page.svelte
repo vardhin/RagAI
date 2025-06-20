@@ -132,7 +132,8 @@
     isLoading = true;
     
     try {
-      const endpoint = isSignup ? '/auth/signup' : '/auth/signin';
+      // Fix the endpoint paths to match backend
+      const endpoint = isSignup ? '/signup' : '/signin';
       const payload = isSignup 
         ? {
             email: formData.email.trim(),
@@ -144,8 +145,6 @@
             email: formData.email.trim(),
             password: formData.password
           };
-
-
 
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: 'POST',
@@ -206,7 +205,7 @@
         } else {
           // For signin, fetch user profile from backend
           try {
-            const profileResponse = await fetch(`${API_BASE_URL}/auth/me`, {
+            const profileResponse = await fetch(`${API_BASE_URL}/profile`, {
               method: 'GET',
               headers: {
                 'Authorization': `Bearer ${data.access_token}`,

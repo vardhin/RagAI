@@ -1,0 +1,6 @@
+.env
+node_modules
+node_modules/
+vector_store.db
+__pycache__
+auth.db

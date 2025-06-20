@@ -1,7 +1,7 @@
 import sqlite3
 import numpy as np
 import pickle
-from typing import List, Dict
+from typing import List, Dict, Optional
 import uuid
 
 class VectorStore:
@@ -14,14 +14,16 @@ class VectorStore:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Documents table
+            # Documents table - now includes user_id
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY,
-                    document_hash TEXT UNIQUE NOT NULL,
+                    document_hash TEXT NOT NULL,
                     filename TEXT NOT NULL,
+                    user_id INTEGER,
                     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    chunk_count INTEGER NOT NULL
+                    chunk_count INTEGER NOT NULL,
+                    UNIQUE(document_hash, user_id)
                 )
             """)
             
@@ -40,17 +42,24 @@ class VectorStore:
             # Create indices for better performance
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_document_hash ON documents (document_hash)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_document_id ON chunks (document_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON documents (user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_hash ON documents (user_id, document_hash)")
             
             conn.commit()
     
-    def document_exists(self, document_hash: str) -> bool:
-        """Check if document already exists"""
+    def document_exists(self, document_hash: str, user_id: Optional[int] = None) -> bool:
+        """Check if document already exists for the user"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT 1 FROM documents WHERE document_hash = ?", (document_hash,))
+            if user_id is not None:
+                cursor.execute("SELECT 1 FROM documents WHERE document_hash = ? AND user_id = ?", 
+                             (document_hash, user_id))
+            else:
+                cursor.execute("SELECT 1 FROM documents WHERE document_hash = ?", (document_hash,))
             return cursor.fetchone() is not None
     
-    def store_document(self, document_hash: str, filename: str, chunks: List[str], embeddings: np.ndarray) -> str:
+    def store_document(self, document_hash: str, filename: str, chunks: List[str], 
+                      embeddings: np.ndarray, user_id: Optional[int] = None) -> str:
         """Store document and its embeddings"""
         document_id = str(uuid.uuid4())
         
@@ -59,9 +68,9 @@ class VectorStore:
             
             # Store document metadata
             cursor.execute("""
-                INSERT INTO documents (id, document_hash, filename, chunk_count)
-                VALUES (?, ?, ?, ?)
-            """, (document_id, document_hash, filename, len(chunks)))
+                INSERT INTO documents (id, document_hash, filename, user_id, chunk_count)
+                VALUES (?, ?, ?, ?, ?)
+            """, (document_id, document_hash, filename, user_id, len(chunks)))
             
             # Store chunks and embeddings
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
@@ -77,17 +86,26 @@ class VectorStore:
         
         return document_id
     
-    def search_similar(self, query_embedding: np.ndarray, top_k: int = 5) -> List[Dict]:
-        """Search for similar chunks using cosine similarity"""
+    def search_similar(self, query_embedding: np.ndarray, top_k: int = 5, 
+                      user_id: Optional[int] = None) -> List[Dict]:
+        """Search for similar chunks using cosine similarity, optionally filtered by user"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Get all chunks with their embeddings
-            cursor.execute("""
-                SELECT c.id, c.content, c.embedding, c.document_id, d.filename
-                FROM chunks c
-                JOIN documents d ON c.document_id = d.id
-            """)
+            # Get all chunks with their embeddings, filtered by user if specified
+            if user_id is not None:
+                cursor.execute("""
+                    SELECT c.id, c.content, c.embedding, c.document_id, d.filename
+                    FROM chunks c
+                    JOIN documents d ON c.document_id = d.id
+                    WHERE d.user_id = ?
+                """, (user_id,))
+            else:
+                cursor.execute("""
+                    SELECT c.id, c.content, c.embedding, c.document_id, d.filename
+                    FROM chunks c
+                    JOIN documents d ON c.document_id = d.id
+                """)
             
             results = []
             for row in cursor.fetchall():
@@ -120,15 +138,24 @@ class VectorStore:
         
         return dot_product / (norm_vec1 * norm_vec2)
     
-    def list_documents(self) -> List[Dict]:
-        """List all stored documents"""
+    def list_documents(self, user_id: Optional[int] = None) -> List[Dict]:
+        """List all stored documents, optionally filtered by user"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, filename, upload_date, chunk_count
-                FROM documents
-                ORDER BY upload_date DESC
-            """)
+            
+            if user_id is not None:
+                cursor.execute("""
+                    SELECT id, filename, upload_date, chunk_count, document_hash
+                    FROM documents
+                    WHERE user_id = ?
+                    ORDER BY upload_date DESC
+                """, (user_id,))
+            else:
+                cursor.execute("""
+                    SELECT id, filename, upload_date, chunk_count, document_hash
+                    FROM documents
+                    ORDER BY upload_date DESC
+                """)
             
             documents = []
             for row in cursor.fetchall():
@@ -136,23 +163,96 @@ class VectorStore:
                     'id': row[0],
                     'filename': row[1],
                     'upload_date': row[2],
-                    'chunk_count': row[3]
+                    'chunk_count': row[3],
+                    'document_hash': row[4]
                 })
             
             return documents
     
-    def delete_document(self, document_id: str) -> bool:
-        """Delete a document and all its chunks"""
+    def delete_document(self, document_id: str, user_id: Optional[int] = None) -> bool:
+        """Delete a document and all its chunks, optionally checking user ownership"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            # Check if document exists
-            cursor.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,))
+            # Check if document exists and belongs to user (if user_id specified)
+            if user_id is not None:
+                cursor.execute("SELECT 1 FROM documents WHERE id = ? AND user_id = ?", 
+                             (document_id, user_id))
+            else:
+                cursor.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,))
+            
             if not cursor.fetchone():
                 return False
             
-            # Delete chunks (will cascade due to foreign key)
+            # Delete document (chunks will cascade due to foreign key)
             cursor.execute("DELETE FROM documents WHERE id = ?", (document_id,))
             conn.commit()
             
             return True
+    
+    def get_document_by_hash(self, document_hash: str, user_id: Optional[int] = None) -> Optional[Dict]:
+        """Get document by hash, optionally filtered by user"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            if user_id is not None:
+                cursor.execute("""
+                    SELECT id, filename, upload_date, chunk_count
+                    FROM documents
+                    WHERE document_hash = ? AND user_id = ?
+                """, (document_hash, user_id))
+            else:
+                cursor.execute("""
+                    SELECT id, filename, upload_date, chunk_count
+                    FROM documents
+                    WHERE document_hash = ?
+                """, (document_hash,))
+            
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'filename': row[1],
+                    'upload_date': row[2],
+                    'chunk_count': row[3]
+                }
+            return None
+    
+    def get_user_document_count(self, user_id: int) -> int:
+        """Get number of documents for a user"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM documents WHERE user_id = ?", (user_id,))
+            return cursor.fetchone()[0]
+    
+    def get_user_chunk_count(self, user_id: int) -> int:
+        """Get total number of chunks for a user"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT SUM(chunk_count) FROM documents WHERE user_id = ?
+            """, (user_id,))
+            result = cursor.fetchone()[0]
+            return result if result is not None else 0
+    
+    def migrate_existing_documents(self):
+        """Migrate existing documents to have user_id column (for upgrading existing databases)"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Check if user_id column exists
+            cursor.execute("PRAGMA table_info(documents)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'user_id' not in columns:
+                # Add user_id column
+                cursor.execute("ALTER TABLE documents ADD COLUMN user_id INTEGER")
+                
+                # Update unique constraint
+                cursor.execute("DROP INDEX IF EXISTS idx_document_hash")
+                cursor.execute("CREATE INDEX idx_document_hash ON documents (document_hash)")
+                cursor.execute("CREATE INDEX idx_user_id ON documents (user_id)")
+                cursor.execute("CREATE INDEX idx_user_hash ON documents (user_id, document_hash)")
+                
+                conn.commit()
+                print("Database migrated to support user authentication")

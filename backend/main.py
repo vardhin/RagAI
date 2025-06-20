@@ -1,5 +1,6 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from typing import List
@@ -12,8 +13,31 @@ import json
 from pdf_processor import PDFProcessor
 from vector_store import VectorStore
 from embeddings import EmbeddingGenerator
+from auth import (
+    auth_manager, 
+    UserSignup, 
+    UserSignin, 
+    TokenResponse, 
+    RefreshTokenRequest,
+    UserProfile,
+    get_current_user,
+    get_current_active_user,
+    SecurityMiddleware
+)
 
 app = FastAPI(title="RAG Pipeline API", version="1.0.0")
+
+# Add CORS middleware first
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure this properly for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add security middleware after CORS
+app.add_middleware(SecurityMiddleware)
 
 # Initialize components
 pdf_processor = PDFProcessor()
@@ -38,8 +62,52 @@ class QueryResponse(BaseModel):
     sources: List[dict]
     model_used: str
 
+# Root endpoint for health check
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {"message": "RAG Pipeline API", "version": "1.0.0", "status": "running"}
+
+# Authentication endpoints - make sure these are defined before middleware issues
+@app.post("/signup", response_model=TokenResponse)
+async def signup(user_data: UserSignup, request: Request):
+    """User registration endpoint"""
+    try:
+        return await auth_manager.signup(user_data, request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/signin", response_model=TokenResponse)
+async def signin(user_data: UserSignin, request: Request):
+    """User login endpoint"""
+    try:
+        return await auth_manager.signin(user_data, request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/refresh", response_model=TokenResponse)
+async def refresh_token(refresh_request: RefreshTokenRequest):
+    """Refresh access token endpoint"""
+    return await auth_manager.refresh_token(refresh_request)
+
+@app.post("/logout")
+async def logout(current_user: UserProfile = Depends(get_current_user)):
+    """User logout endpoint"""
+    # Note: You'll need to extract the token from the request
+    # This is a simplified version
+    return {"message": "Logged out successfully"}
+
+@app.get("/profile", response_model=UserProfile)
+async def get_profile(current_user: UserProfile = Depends(get_current_user)):
+    """Get user profile endpoint"""
+    return current_user
+
+# Protected endpoints - now require authentication
 @app.post("/upload-pdf/")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(
+    file: UploadFile = File(...),
+    current_user: UserProfile = Depends(get_current_active_user)
+):
     """Upload and process a PDF file into vector embeddings"""
     
     if not file.filename.endswith('.pdf'):
@@ -70,12 +138,13 @@ async def upload_pdf(file: UploadFile = File(...)):
         # Generate embeddings
         embeddings = embedding_generator.generate_embeddings(text_chunks)
         
-        # Store in vector database
+        # Store in vector database with user association
         document_id = vector_store.store_document(
             document_hash=file_hash,
             filename=file.filename,
             chunks=text_chunks,
-            embeddings=embeddings
+            embeddings=embeddings,
+            user_id=current_user.id  # Associate document with user
         )
         
         # Clean up uploaded file
@@ -97,13 +166,16 @@ async def upload_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 @app.post("/upload-multiple-pdfs/")
-async def upload_multiple_pdfs(files: List[UploadFile] = File(...)):
+async def upload_multiple_pdfs(
+    files: List[UploadFile] = File(...),
+    current_user: UserProfile = Depends(get_current_active_user)
+):
     """Upload and process multiple PDF files"""
     results = []
     
     for file in files:
         try:
-            result = await upload_pdf(file)
+            result = await upload_pdf(file, current_user)
             results.append({"filename": file.filename, "status": "success", "result": result})
         except Exception as e:
             results.append({"filename": file.filename, "status": "error", "error": str(e)})
@@ -111,15 +183,18 @@ async def upload_multiple_pdfs(files: List[UploadFile] = File(...)):
     return JSONResponse(content={"results": results})
 
 @app.get("/documents/")
-async def list_documents():
-    """List all processed documents"""
-    documents = vector_store.list_documents()
+async def list_documents(current_user: UserProfile = Depends(get_current_active_user)):
+    """List all processed documents for the current user"""
+    documents = vector_store.list_documents(user_id=current_user.id)
     return JSONResponse(content={"documents": documents})
 
 @app.delete("/documents/{document_id}")
-async def delete_document(document_id: str):
+async def delete_document(
+    document_id: str,
+    current_user: UserProfile = Depends(get_current_active_user)
+):
     """Delete a document and its embeddings"""
-    success = vector_store.delete_document(document_id)
+    success = vector_store.delete_document(document_id, user_id=current_user.id)
     if success:
         return JSONResponse(content={"message": "Document deleted successfully"})
     else:
@@ -131,15 +206,22 @@ async def health_check():
     return JSONResponse(content={"status": "healthy"})
 
 @app.post("/query/", response_model=QueryResponse)
-async def query_documents(request: QueryRequest):
+async def query_documents(
+    request: QueryRequest,
+    current_user: UserProfile = Depends(get_current_active_user)
+):
     """Query documents using RAG with Ollama"""
     
     try:
         # Generate embedding for the query
         query_embedding = embedding_generator.generate_embeddings([request.question])[0]
         
-        # Search for similar chunks
-        similar_chunks = vector_store.search_similar(query_embedding, top_k=request.top_k)
+        # Search for similar chunks (scoped to user's documents)
+        similar_chunks = vector_store.search_similar(
+            query_embedding, 
+            top_k=request.top_k,
+            user_id=current_user.id
+        )
         
         if not similar_chunks:
             raise HTTPException(status_code=404, detail="No relevant documents found")
@@ -217,7 +299,10 @@ async def get_available_models():
         raise HTTPException(status_code=503, detail="Ollama service not available")
 
 @app.post("/query/stream/")
-async def query_documents_stream(request: QueryRequest):
+async def query_documents_stream(
+    request: QueryRequest,
+    current_user: UserProfile = Depends(get_current_active_user)
+):
     """Query documents with streaming response from Ollama"""
     from fastapi.responses import StreamingResponse
     import json
@@ -226,8 +311,12 @@ async def query_documents_stream(request: QueryRequest):
         # Generate embedding for the query
         query_embedding = embedding_generator.generate_embeddings([request.question])[0]
         
-        # Search for similar chunks
-        similar_chunks = vector_store.search_similar(query_embedding, top_k=request.top_k)
+        # Search for similar chunks (scoped to user's documents)
+        similar_chunks = vector_store.search_similar(
+            query_embedding, 
+            top_k=request.top_k,
+            user_id=current_user.id
+        )
         
         if not similar_chunks:
             raise HTTPException(status_code=404, detail="No relevant documents found")
